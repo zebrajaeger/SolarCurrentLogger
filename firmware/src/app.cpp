@@ -26,7 +26,7 @@ INA219 INA(0x40);
 // Definition of the measurement structure
 struct Measurement {
   float value;
-  time_t timestamp;
+  int64_t timestamp;
 };
 
 unsigned long lastMeasureTime = 0;
