@@ -11,7 +11,8 @@
 
 #include "INA219.h"
 #include "config.h"
-// #include "esp_timer.h"
+#include "ota.h"
+
 
 // Compile-time checks for the configuration literals
 static_assert(sizeof(WIFI_SSID) > 1, "WIFI_SSID must not be empty!");
@@ -54,6 +55,9 @@ unsigned long lastMemoryPrintTime = 0;
 // Global instances of the request objects
 AsyncHTTPRequest httpRequest;    // For HTTP
 AsyncHTTPSRequest httpsRequest;  // For HTTPS – standard constructor, no parameters
+
+// OTA
+OTAHandler ota;
 
 void requestCompleteHTTP(void *optParm, AsyncHTTPRequest *request, int readyState) {
   Serial.print("requestCompleteHTTP(redystate:");
@@ -255,6 +259,9 @@ void setup() {
   }
   Serial.println("\nWiFi connected");
 
+  // OTA
+  ota.setup("SolarCurrentLogger");
+
   // Synchronize NTP time
   sntp_set_time_sync_notification_cb(timeSyncCallback);
   configTime(0, 0, "pool.ntp.org", "time.nist.gov");
@@ -285,6 +292,10 @@ void setup() {
 }
 
 void loop() {
+  // OTA
+  ota.loop();
+
+  // Measurement
   if (millis() - lastMeasureTime >= MEASURE_INTERVAL) {
     lastMeasureTime = millis();
     // dumpTime();
@@ -318,13 +329,13 @@ void loop() {
     xSemaphoreGive(ringBufferMutex);
   }
 
-  // Attempt to send data
+  // Send data
   if (millis() - lastSendTime >= SEND_INTERVAL) {
     lastSendTime = millis();
     sendBuffer();
   }
 
-  // Output free heap memory (configurable interval)
+  // Output free heap memory
   if (millis() - lastMemoryPrintTime >= MEMORY_PRINT_INTERVAL) {
     lastMemoryPrintTime = millis();
     size_t freeHeap = esp_get_free_heap_size();
