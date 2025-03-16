@@ -9,6 +9,7 @@
 
 #include "INA219.h"
 #include "config.h"
+#include "json_helper.h"
 #include "ntp.h"
 #include "ota.h"
 #include "ringbuffer.h"
@@ -26,9 +27,6 @@ INA219 INA(0x40);
 unsigned long lastMeasureTime = 0;
 
 Measurement tempBuffer[CHUNK_SIZE];
-
-// // FreeRTOS mutex to protect the ring buffer
-// SemaphoreHandle_t ringBufferMutex;
 
 // Variables for controlling asynchronous sending
 bool sendInProgress = false;
@@ -60,7 +58,7 @@ void requestCompleteHTTP(void *optParm, AsyncHTTPRequest *request, int readyStat
 
   if (readyState == readyStateDone) {
     int httpCode = request->responseHTTPcode();
-    
+
     Serial.print("HTTP request completed. Code: ");
     Serial.println(httpCode);
 
@@ -82,7 +80,7 @@ void requestCompleteHTTP(void *optParm, AsyncHTTPRequest *request, int readyStat
 void requestCompleteHTTPS(void *optParm, AsyncHTTPSRequest *request, int readyState) {
   if (readyState == readyStateDone) {
     int httpCode = request->responseHTTPcode();
-    
+
     Serial.print("HTTPS request completed. Code: ");
     Serial.println(httpCode);
 
@@ -161,16 +159,9 @@ void sendBuffer() {
     return;
   }
 
-  // Create JSON document for the current chunk
-  DynamicJsonDocument doc(15000);
-  JsonArray measurementsArray = doc.createNestedArray("measurements");
-  for (int i = 0; i < sendCount; i++) {
-    JsonObject obj = measurementsArray.createNestedObject();
-    obj["timestamp"] = tempBuffer[i].timestamp;
-    obj["value"] = tempBuffer[i].value;
-  }
+  // Generate JSON payload from the current chunk.
   String jsonPayload;
-  serializeJson(doc, jsonPayload);
+  toJson(tempBuffer, sendCount, &jsonPayload);
 
   sendAsyncRequest(jsonPayload);
 
@@ -239,7 +230,6 @@ void loop() {
     m.value = ((float)INA.getShuntValue()) / (float)10;
     ringBuffer.addMeasurement(m);
 
-    // int64_t now = getCurrentEpochUnixTimestamp();
     Serial.print("Measurement: ");
     Serial.print(m.value);
     Serial.print(" mA, Time: ");
