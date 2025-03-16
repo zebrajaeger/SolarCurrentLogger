@@ -2,13 +2,13 @@
 #include <WiFi.h>
 #include <esp_heap_caps.h>
 
-#include "INA219.h"
 #include "config.h"
+#include "http_sender.h"
 #include "json_helper.h"
 #include "ntp.h"
 #include "ota.h"
 #include "ringbuffer.h"
-#include "http_sender.h"
+#include "sensor.h"
 
 // Compile-time checks for the configuration literals
 static_assert(sizeof(WIFI_SSID) > 1, "WIFI_SSID must not be empty!");
@@ -17,8 +17,8 @@ static_assert(sizeof(SERVER_URL) > 1, "SERVER_URL must not be empty!");
 static_assert(sizeof(BUFFER_SIZE) > 1, "BUFFER_SIZE must not be empty!");
 static_assert(sizeof(CHUNK_SIZE) > 1, "CHUNK_SIZE must not be empty!");
 
-// INA219 instance
-INA219 INA(0x40);
+INA219Sensor sensorINA219;
+Sensor &sensor = sensorINA219;
 
 unsigned long lastMeasureTime = 0;
 
@@ -32,10 +32,6 @@ unsigned long lastSendTime = 0;
 // Interval for outputting free memory (here 60000 ms, configurable)
 unsigned long lastMemoryPrintTime = 0;
 
-// Global instances of the request objects
-AsyncHTTPRequest httpRequest;    // For HTTP
-AsyncHTTPSRequest httpsRequest;  // For HTTPS – standard constructor, no parameters
-
 // OTA
 OTAHandler ota;
 
@@ -47,7 +43,7 @@ RingBuffer ringBuffer(BUFFER_SIZE);
 
 HttpSender http;
 
-void sendChunc() {
+void sendChunk() {
   if (http.isSending()) {
     Serial.println("Already sending. Skip.");
     return;
@@ -78,21 +74,10 @@ int64_t getCurrentEpochUnixTimestamp() {
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("Current measurement started with asynchronous sending, mutex, and memory output.");
+  Serial.println("SolarCurrentLogger starting...");
 
-  // Initialize INA219
-  Wire.begin();
-  if (!INA.begin()) {
-    Serial.println("INA219 not found! Please check wiring.");
-    while (1);
-  }
-
-  INA.reset();
-  INA.setGain(1);
-  INA.setModeShuntContinuous();
-  INA.setShuntSamples(7);  // 128 samples
-
-  delay(1000);
+  // Initialize sensor
+  sensor.setup();
 
   // Establish WiFi connection
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -112,7 +97,7 @@ void setup() {
   // HTTP
   http.setServerUrl(SERVER_URL);
 
-  #ifdef API_TOKEN
+#ifdef API_TOKEN
   http.setApiToken(API_TOKEN);
 #endif
 
@@ -120,23 +105,16 @@ void setup() {
   http.setBasicAuth(BASIC_AUTH_USERNAME, BASIC_AUTH_PASSWORD);
 #endif
 
-http.setFailureCallback([](int httpCode, const String &response) {
-    Serial.print("HTTP request failed: ");
-    Serial.print(httpCode);
-    Serial.print(" ");
-    Serial.println(response);
-    Serial.println("Sending failed, data remains in the ring buffer.");
+  http.setFailureCallback([](int httpCode, const String &response) {
+    Serial.printf("HTTP request failed: %d %s\nSending failed, data remains in the ring buffer.\n", httpCode,
+                  response.c_str());
   });
 
   http.setSuccessCallback([](int httpCode, const String &response) {
-    Serial.print("HTTP request successful: ");
-    Serial.print(httpCode);
-    Serial.print(" ");
-    Serial.println(response);
+    Serial.printf("HTTP request successful: %d %s\n", httpCode, response.c_str());
     int removed = ringBuffer.removeChunk(sendBuffer, sendBufferSize);
     Serial.print("Successfully removed transmitted records: ");
     Serial.println(removed);
-  
   });
 
   lastMeasureTime = millis();
@@ -152,26 +130,17 @@ void loop() {
   if (millis() - lastMeasureTime >= MEASURE_INTERVAL) {
     lastMeasureTime = millis();
 
-    Measurement m;
-    m.timestamp = getCurrentEpochUnixTimestamp();
-    m.value = ((float)INA.getShuntValue()) / (float)10;
+    Measurement m = {.value = sensor.getCurrentInMa(), .timestamp = getCurrentEpochUnixTimestamp()};
     ringBuffer.addMeasurement(m);
 
-    Serial.print("Measurement: ");
-    Serial.print(m.value);
-    Serial.print(" mA, Time: ");
-    Serial.print(m.timestamp);
-
-    Serial.print(" Used slots: ");
-    Serial.print(ringBuffer.getCount());
-    Serial.print("/");
-    Serial.println(BUFFER_SIZE);
+    Serial.printf("Measurement: %.2f mA, Time: %lld Used slots: %d/%d\n", m.value, m.timestamp, ringBuffer.getCount(),
+                  BUFFER_SIZE);
   }
 
   // Send data
   if (millis() - lastSendTime >= SEND_INTERVAL) {
     lastSendTime = millis();
-    sendChunc();
+    sendChunk();
   }
 
   // Output free heap memory
