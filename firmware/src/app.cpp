@@ -6,13 +6,11 @@
 #include <Base64.h>
 #include <WiFi.h>
 #include <esp_heap_caps.h>
-#include <esp_sntp.h>
-#include <time.h>
 
 #include "INA219.h"
 #include "config.h"
+#include "ntp.h"
 #include "ota.h"
-
 
 // Compile-time checks for the configuration literals
 static_assert(sizeof(WIFI_SSID) > 1, "WIFI_SSID must not be empty!");
@@ -59,12 +57,15 @@ AsyncHTTPSRequest httpsRequest;  // For HTTPS – standard constructor, no param
 // OTA
 OTAHandler ota;
 
+// NTP
+NTPHandler ntp;
+
 void requestCompleteHTTP(void *optParm, AsyncHTTPRequest *request, int readyState) {
   Serial.print("requestCompleteHTTP(redystate:");
   Serial.print(readyState);
   Serial.println(")");
 
-if (readyState == readyStateDone) {
+  if (readyState == readyStateDone) {
     int httpCode = request->responseHTTPcode();
     Serial.print("HTTP request completed. Code: ");
     Serial.println(httpCode);
@@ -220,12 +221,6 @@ void sendBuffer() {
   Serial.println(" records.");
 }
 
-void timeSyncCallback(struct timeval *tv) {
-  Serial.println("\n----Time Sync----- Time should have been verified and updated if needed");
-  Serial.println(tv->tv_sec);
-  Serial.println(ctime(&tv->tv_sec));
-}
-
 int64_t getCurrentEpochUnixTimestamp() {
   timeval tv;
   gettimeofday(&tv, nullptr);
@@ -263,21 +258,7 @@ void setup() {
   ota.setup("SolarCurrentLogger");
 
   // Synchronize NTP time
-  sntp_set_time_sync_notification_cb(timeSyncCallback);
-  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
-  Serial.println("Synchronizing NTP time...");
-  struct tm timeinfo;
-  int retry = 0;
-  while (!getLocalTime(&timeinfo) && retry < 10) {
-    delay(1000);
-    Serial.print(".");
-    retry++;
-  }
-  if (retry == 10) {
-    Serial.println("\nError: No NTP time received.");
-  } else {
-    Serial.println("\nNTP time synchronized.");
-  }
+  ntp.setup();
 
   lastMeasureTime = millis();
   lastSendTime = millis();
