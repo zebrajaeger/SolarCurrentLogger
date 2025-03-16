@@ -1,9 +1,4 @@
 #include <Arduino.h>
-#include <ArduinoJson.h>
-#include <AsyncHTTPRequest_Generic.h>   // For HTTP
-#include <AsyncHTTPSRequest_Generic.h>  // For HTTPS
-#include <AsyncTCP_SSL.h>               // For asynchronous TCP/SSL functionality
-#include <Base64.h>
 #include <WiFi.h>
 #include <esp_heap_caps.h>
 
@@ -13,6 +8,7 @@
 #include "ntp.h"
 #include "ota.h"
 #include "ringbuffer.h"
+#include "http_sender.h"
 
 // Compile-time checks for the configuration literals
 static_assert(sizeof(WIFI_SSID) > 1, "WIFI_SSID must not be empty!");
@@ -26,11 +22,9 @@ INA219 INA(0x40);
 
 unsigned long lastMeasureTime = 0;
 
-Measurement tempBuffer[CHUNK_SIZE];
-
-// Variables for controlling asynchronous sending
-bool sendInProgress = false;
-int lastSentChunkSize = 0;
+// Send buffer
+Measurement sendBuffer[CHUNK_SIZE];
+int sendBufferSize = 0;
 
 // Sending interval: a sending attempt is made every 5 seconds
 unsigned long lastSendTime = 0;
@@ -51,122 +45,25 @@ NTPHandler ntp;
 // RingBuffer
 RingBuffer ringBuffer(BUFFER_SIZE);
 
-void requestCompleteHTTP(void *optParm, AsyncHTTPRequest *request, int readyState) {
-  Serial.print("requestCompleteHTTP(redystate:");
-  Serial.print(readyState);
-  Serial.println(")");
+HttpSender http;
 
-  if (readyState == readyStateDone) {
-    int httpCode = request->responseHTTPcode();
-
-    Serial.print("HTTP request completed. Code: ");
-    Serial.println(httpCode);
-
-    // Print the response as a readable string
-    Serial.print("HTTP response: ");
-    Serial.println(request->responseHTTPString());
-
-    if (httpCode >= 200 && httpCode < 300) {
-      int removed = ringBuffer.removeChunk(tempBuffer, lastSentChunkSize);
-      Serial.print("Successfully removed transmitted records: ");
-      Serial.println(removed);
-    } else {
-      Serial.println("Sending failed, data remains in the ring buffer.");
-    }
-    sendInProgress = false;
-  }
-}
-
-void requestCompleteHTTPS(void *optParm, AsyncHTTPSRequest *request, int readyState) {
-  if (readyState == readyStateDone) {
-    int httpCode = request->responseHTTPcode();
-
-    Serial.print("HTTPS request completed. Code: ");
-    Serial.println(httpCode);
-
-    // Print the response as a readable string
-    Serial.print("HTTPS response: ");
-    Serial.println(request->responseHTTPString());
-
-    if (httpCode >= 200 && httpCode < 300) {
-      int removed = ringBuffer.removeChunk(tempBuffer, lastSentChunkSize);
-      Serial.print("Successfully removed transmitted records: ");
-      Serial.println(removed);
-    } else {
-      Serial.println("Sending failed, data remains in the ring buffer.");
-    }
-    sendInProgress = false;
-  }
-}
-
-void sendAsyncRequest(const String &jsonPayload) {
-  bool useHttps = (strncmp(SERVER_URL, "https", 5) == 0);
-
-  if (useHttps) {
-    httpsRequest.onReadyStateChange(requestCompleteHTTPS);  // Register callback
-    if (httpsRequest.readyState() == readyStateUnsent || httpsRequest.readyState() == readyStateDone) {
-      bool openResult = httpsRequest.open("POST", SERVER_URL);
-      if (openResult) {
-        httpsRequest.setReqHeader("Content-Type", "application/json");
-#ifdef API_TOKEN
-        httpsRequest.setReqHeader("X-API-Token", API_TOKEN);
-#endif
-#if defined(BASIC_AUTH_USERNAME) && defined(BASIC_AUTH_PASSWORD)
-        String credentials = String(BASIC_AUTH_USERNAME) + ":" + String(BASIC_AUTH_PASSWORD);
-        String base64Credentials = base64::encode(credentials);
-        httpsRequest.setReqHeader("Authorization", ("Basic " + base64Credentials).c_str());
-#endif
-        httpsRequest.send(jsonPayload);
-      } else {
-        Serial.println(F("Can't open HTTPS request"));
-      }
-    } else {
-      Serial.println(F("HTTPS request not ready"));
-    }
-  } else {
-    httpRequest.onReadyStateChange(requestCompleteHTTP);  // Register callback
-    if (httpRequest.readyState() == readyStateUnsent || httpRequest.readyState() == readyStateDone) {
-      bool openResult = httpRequest.open("POST", SERVER_URL);
-      if (openResult) {
-        httpRequest.setReqHeader("Content-Type", "application/json");
-#ifdef API_TOKEN
-        httpRequest.setReqHeader("X-API-Token", API_TOKEN);
-#endif
-#if defined(BASIC_AUTH_USERNAME) && defined(BASIC_AUTH_PASSWORD)
-        String credentials = String(BASIC_AUTH_USERNAME) + ":" + String(BASIC_AUTH_PASSWORD);
-        String base64Credentials = base64::encode(credentials);
-        httpRequest.setReqHeader("Authorization", ("Basic " + base64Credentials).c_str());
-#endif
-        httpRequest.send(jsonPayload);
-      } else {
-        Serial.println(F("Can't open HTTP request"));
-      }
-    } else {
-      Serial.println(F("HTTP request not ready"));
-    }
-  }
-}
-
-void sendBuffer() {
-  if (sendInProgress) {
+void sendChunc() {
+  if (http.isSending()) {
     Serial.println("Already sending. Skip.");
     return;
   }
 
-  int sendCount = ringBuffer.getChunk(tempBuffer, CHUNK_SIZE);
+  int sendCount = ringBuffer.getChunk(sendBuffer, CHUNK_SIZE);
   if (sendCount == 0) {
     Serial.println("No data available for sending.");
     return;
   }
 
-  // Generate JSON payload from the current chunk.
   String jsonPayload;
-  toJson(tempBuffer, sendCount, &jsonPayload);
+  toJson(sendBuffer, sendCount, &jsonPayload);
+  http.sendRequest(jsonPayload);
 
-  sendAsyncRequest(jsonPayload);
-
-  sendInProgress = true;
-  lastSentChunkSize = sendCount;
+  sendBufferSize = sendCount;
 
   Serial.print("Asynchronous sending process started for ");
   Serial.print(sendCount);
@@ -212,6 +109,36 @@ void setup() {
   // Synchronize NTP time
   ntp.setup();
 
+  // HTTP
+  http.setServerUrl(SERVER_URL);
+
+  #ifdef API_TOKEN
+  http.setApiToken(API_TOKEN);
+#endif
+
+#ifdef BASIC_AUTH_USERNAME
+  http.setBasicAuth(BASIC_AUTH_USERNAME, BASIC_AUTH_PASSWORD);
+#endif
+
+http.setFailureCallback([](int httpCode, const String &response) {
+    Serial.print("HTTP request failed: ");
+    Serial.print(httpCode);
+    Serial.print(" ");
+    Serial.println(response);
+    Serial.println("Sending failed, data remains in the ring buffer.");
+  });
+
+  http.setSuccessCallback([](int httpCode, const String &response) {
+    Serial.print("HTTP request successful: ");
+    Serial.print(httpCode);
+    Serial.print(" ");
+    Serial.println(response);
+    int removed = ringBuffer.removeChunk(sendBuffer, sendBufferSize);
+    Serial.print("Successfully removed transmitted records: ");
+    Serial.println(removed);
+  
+  });
+
   lastMeasureTime = millis();
   lastSendTime = millis();
   lastMemoryPrintTime = millis();
@@ -244,7 +171,7 @@ void loop() {
   // Send data
   if (millis() - lastSendTime >= SEND_INTERVAL) {
     lastSendTime = millis();
-    sendBuffer();
+    sendChunc();
   }
 
   // Output free heap memory
