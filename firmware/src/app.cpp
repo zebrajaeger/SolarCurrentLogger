@@ -11,7 +11,7 @@
 
 #include "INA219.h"
 #include "config.h"
-#include "esp_timer.h"
+// #include "esp_timer.h"
 
 // Compile-time checks for the configuration literals
 static_assert(sizeof(WIFI_SSID) > 1, "WIFI_SSID must not be empty!");
@@ -31,7 +31,7 @@ struct Measurement {
 
 unsigned long lastMeasureTime = 0;
 
-// Ring buffer configuration
+// // Ring buffer configuration
 Measurement ringBuffer[BUFFER_SIZE];
 int headIndex = 0;          // Points to the oldest entry
 int countMeasurements = 0;  // Number of measurements currently stored in the buffer
@@ -56,7 +56,11 @@ AsyncHTTPRequest httpRequest;    // For HTTP
 AsyncHTTPSRequest httpsRequest;  // For HTTPS – standard constructor, no parameters
 
 void requestCompleteHTTP(void *optParm, AsyncHTTPRequest *request, int readyState) {
-  if (readyState == readyStateDone) {
+  Serial.print("requestCompleteHTTP(redystate:");
+  Serial.print(readyState);
+  Serial.println(")");
+
+if (readyState == readyStateDone) {
     int httpCode = request->responseHTTPcode();
     Serial.print("HTTP request completed. Code: ");
     Serial.println(httpCode);
@@ -172,6 +176,7 @@ void sendAsyncRequest(const String &jsonPayload) {
 
 void sendBuffer() {
   if (sendInProgress) {
+    Serial.println("Already sending. Skip.");
     return;
   }
 
@@ -211,33 +216,33 @@ void sendBuffer() {
   Serial.println(" records.");
 }
 
-void dumpTime() {
-  Serial.println("######### TIME DUMP ##########");
-  Serial.print("# sync  : ");
-  Serial.println(sntp_get_sync_interval());
+// void dumpTime() {
+//   Serial.println("######### TIME DUMP ##########");
+//   Serial.print("# sync  : ");
+//   Serial.println(sntp_get_sync_interval());
 
-  Serial.print("# millis: ");
-  Serial.println(millis() / 1000.0);
+//   Serial.print("# millis: ");
+//   Serial.println(millis() / 1000.0);
 
-  // Serial.print("# ESP:    ");
-  // Serial.println(esp_timer_get_time()/1000000.0);
+//   // Serial.print("# ESP:    ");
+//   // Serial.println(esp_timer_get_time()/1000000.0);
 
-  // Serial.print("# RTC:    ");
-  // time_t now = time(nullptr);
-  // Serial.println(now);
-  timeval tv;
-  gettimeofday(&tv, nullptr);
-  Serial.print("# rtc_s:  ");
-  Serial.println(tv.tv_sec);
-  Serial.print("# rtc_us: ");
-  Serial.println(tv.tv_usec / 1000000.0);
+//   // Serial.print("# RTC:    ");
+//   // time_t now = time(nullptr);
+//   // Serial.println(now);
+//   timeval tv;
+//   gettimeofday(&tv, nullptr);
+//   Serial.print("# rtc_s:  ");
+//   Serial.println(tv.tv_sec);
+//   Serial.print("# rtc_us: ");
+//   Serial.println(tv.tv_usec / 1000000.0);
 
-  int64_t time_ms = (int64_t)tv.tv_sec * 1000LL + (int64_t)tv.tv_usec / 1000LL;
-  Serial.print("# rtc_ms: ");
-  Serial.println(time_ms);
+//   int64_t time_ms = (int64_t)tv.tv_sec * 1000LL + (int64_t)tv.tv_usec / 1000LL;
+//   Serial.print("# rtc_ms: ");
+//   Serial.println(time_ms);
 
-  Serial.println("######### TIME DUMP ##########");
-}
+//   Serial.println("######### TIME DUMP ##########");
+// }
 
 void timeSyncCallback(struct timeval *tv) {
   Serial.println("\n----Time Sync----- Time should have been verified and updated if needed");
@@ -261,9 +266,12 @@ void setup() {
     Serial.println("INA219 not found! Please check wiring.");
     while (1);
   }
-  INA.setMaxCurrentShunt(0.15, 0.100);
-  INA.setMode(5);
-  INA.setShuntSamples(7);
+
+  INA.reset();
+  INA.setGain(1);
+  INA.setModeShuntContinuous();
+  INA.setShuntSamples(7);  // 128 samples
+
   delay(1000);
 
   // Establish WiFi connection
@@ -308,12 +316,19 @@ void loop() {
   if (millis() - lastMeasureTime >= MEASURE_INTERVAL) {
     lastMeasureTime = millis();
     // dumpTime();
-    float current_mA = INA.getCurrent_uA() / 1000.0;
+
+    float current_mA = ((float)INA.getShuntValue()) / (float)10;
+
     int64_t now = getCurrentEpochUnixTimestamp();
     Serial.print("Measurement: ");
     Serial.print(current_mA);
     Serial.print(" mA, Time: ");
-    Serial.println(now);
+    Serial.print(now);
+
+    Serial.print(" Used slots: ");
+    Serial.print(countMeasurements);
+    Serial.print("/");
+    Serial.println(BUFFER_SIZE);
 
     // Write the new measurement into the ring buffer (mutex-protected)
     xSemaphoreTake(ringBufferMutex, portMAX_DELAY);
