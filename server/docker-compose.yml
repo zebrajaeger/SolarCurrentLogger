@@ -1,0 +1,62 @@
+services:
+  solar.app:
+    build: .
+    container_name: solar.app
+    ports:
+      - "7777:7777"
+    depends_on:
+      - solar.influxdb
+    environment:
+      - INFLUXDB_URL=http://solar.influxdb:8086
+      - INFLUXDB_BUCKET=solar
+      - INFLUXDB_ORG=zj
+      - INFLUXDB_TOKEN=MyInfluxDbToken
+      - API_TOKEN=1234567890
+    networks:
+      # - proxy
+      - solar-network
+    restart: unless-stopped
+
+  solar.influxdb:
+    image: influxdb:2.7
+    container_name: solar.influxdb
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdb-storage:/var/lib/influxdb2
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=admin123
+      - DOCKER_INFLUXDB_INIT_ORG=zj
+      - DOCKER_INFLUXDB_INIT_BUCKET=solar
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=mysecrettoken
+    networks:
+      - solar-network
+    restart: unless-stopped
+
+  solar.grafana:
+    image: grafana/grafana:latest
+    container_name: solar.grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-storage:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - solar.influxdb
+    networks:
+      - solar-network
+    restart: unless-stopped
+
+volumes:
+  influxdb-storage:
+  grafana-storage:
+
+networks:
+  # proxy:
+    # external: true
+  solar-network:
+    driver: bridge
