@@ -216,34 +216,6 @@ void sendBuffer() {
   Serial.println(" records.");
 }
 
-// void dumpTime() {
-//   Serial.println("######### TIME DUMP ##########");
-//   Serial.print("# sync  : ");
-//   Serial.println(sntp_get_sync_interval());
-
-//   Serial.print("# millis: ");
-//   Serial.println(millis() / 1000.0);
-
-//   // Serial.print("# ESP:    ");
-//   // Serial.println(esp_timer_get_time()/1000000.0);
-
-//   // Serial.print("# RTC:    ");
-//   // time_t now = time(nullptr);
-//   // Serial.println(now);
-//   timeval tv;
-//   gettimeofday(&tv, nullptr);
-//   Serial.print("# rtc_s:  ");
-//   Serial.println(tv.tv_sec);
-//   Serial.print("# rtc_us: ");
-//   Serial.println(tv.tv_usec / 1000000.0);
-
-//   int64_t time_ms = (int64_t)tv.tv_sec * 1000LL + (int64_t)tv.tv_usec / 1000LL;
-//   Serial.print("# rtc_ms: ");
-//   Serial.println(time_ms);
-
-//   Serial.println("######### TIME DUMP ##########");
-// }
-
 void timeSyncCallback(struct timeval *tv) {
   Serial.println("\n----Time Sync----- Time should have been verified and updated if needed");
   Serial.println(tv->tv_sec);
