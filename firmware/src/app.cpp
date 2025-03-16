@@ -11,6 +11,7 @@
 #include "config.h"
 #include "ntp.h"
 #include "ota.h"
+#include "ringbuffer.h"
 
 // Compile-time checks for the configuration literals
 static_assert(sizeof(WIFI_SSID) > 1, "WIFI_SSID must not be empty!");
@@ -22,23 +23,23 @@ static_assert(sizeof(CHUNK_SIZE) > 1, "CHUNK_SIZE must not be empty!");
 // INA219 instance
 INA219 INA(0x40);
 
-// Definition of the measurement structure
-struct Measurement {
-  float value;
-  int64_t timestamp;
-};
+// // Definition of the measurement structure
+// struct Measurement {
+//   float value;
+//   int64_t timestamp;
+// };
 
 unsigned long lastMeasureTime = 0;
 
-// // Ring buffer configuration
-Measurement ringBuffer[BUFFER_SIZE];
-int headIndex = 0;          // Points to the oldest entry
-int countMeasurements = 0;  // Number of measurements currently stored in the buffer
+// // // Ring buffer configuration
+// Measurement ringBuffer[BUFFER_SIZE];
+// int headIndex = 0;          // Points to the oldest entry
+// int countMeasurements = 0;  // Number of measurements currently stored in the buffer
 
 Measurement tempBuffer[CHUNK_SIZE];
 
-// FreeRTOS mutex to protect the ring buffer
-SemaphoreHandle_t ringBufferMutex;
+// // FreeRTOS mutex to protect the ring buffer
+// SemaphoreHandle_t ringBufferMutex;
 
 // Variables for controlling asynchronous sending
 bool sendInProgress = false;
@@ -60,6 +61,9 @@ OTAHandler ota;
 // NTP
 NTPHandler ntp;
 
+// RingBuffer
+RingBuffer ringBuffer(BUFFER_SIZE);
+
 void requestCompleteHTTP(void *optParm, AsyncHTTPRequest *request, int readyState) {
   Serial.print("requestCompleteHTTP(redystate:");
   Serial.print(readyState);
@@ -74,21 +78,22 @@ void requestCompleteHTTP(void *optParm, AsyncHTTPRequest *request, int readyStat
     Serial.println(request->responseHTTPString());
 
     if (httpCode >= 200 && httpCode < 300) {
+      int removed = ringBuffer.removeChunk(tempBuffer, lastSentChunkSize);
       // Remove the sent data from the ring buffer
-      xSemaphoreTake(ringBufferMutex, portMAX_DELAY);
-      int removed = 0;
-      for (int i = 0; i < lastSentChunkSize && i < countMeasurements; i++) {
-        int idx = (headIndex + i) % BUFFER_SIZE;
-        if (ringBuffer[idx].timestamp == tempBuffer[i].timestamp &&
-            fabs(ringBuffer[idx].value - tempBuffer[i].value) < 0.001) {
-          removed++;
-        } else {
-          break;
-        }
-      }
-      headIndex = (headIndex + removed) % BUFFER_SIZE;
-      countMeasurements -= removed;
-      xSemaphoreGive(ringBufferMutex);
+      // xSemaphoreTake(ringBufferMutex, portMAX_DELAY);
+      // int removed = 0;
+      // for (int i = 0; i < lastSentChunkSize && i < countMeasurements; i++) {
+      //   int idx = (headIndex + i) % BUFFER_SIZE;
+      //   if (ringBuffer[idx].timestamp == tempBuffer[i].timestamp &&
+      //       fabs(ringBuffer[idx].value - tempBuffer[i].value) < 0.001) {
+      //     removed++;
+      //   } else {
+      //     break;
+      //   }
+      // }
+      // headIndex = (headIndex + removed) % BUFFER_SIZE;
+      // countMeasurements -= removed;
+      // xSemaphoreGive(ringBufferMutex);
       Serial.print("Successfully removed transmitted records: ");
       Serial.println(removed);
     } else {
@@ -108,20 +113,21 @@ void requestCompleteHTTPS(void *optParm, AsyncHTTPSRequest *request, int readySt
     Serial.println(request->responseHTTPString());
 
     if (httpCode >= 200 && httpCode < 300) {
-      xSemaphoreTake(ringBufferMutex, portMAX_DELAY);
-      int removed = 0;
-      for (int i = 0; i < lastSentChunkSize && i < countMeasurements; i++) {
-        int idx = (headIndex + i) % BUFFER_SIZE;
-        if (ringBuffer[idx].timestamp == tempBuffer[i].timestamp &&
-            fabs(ringBuffer[idx].value - tempBuffer[i].value) < 0.001) {
-          removed++;
-        } else {
-          break;
-        }
-      }
-      headIndex = (headIndex + removed) % BUFFER_SIZE;
-      countMeasurements -= removed;
-      xSemaphoreGive(ringBufferMutex);
+      int removed = ringBuffer.removeChunk(tempBuffer, lastSentChunkSize);
+      // xSemaphoreTake(ringBufferMutex, portMAX_DELAY);
+      // int removed = 0;
+      // for (int i = 0; i < lastSentChunkSize && i < countMeasurements; i++) {
+      //   int idx = (headIndex + i) % BUFFER_SIZE;
+      //   if (ringBuffer[idx].timestamp == tempBuffer[i].timestamp &&
+      //       fabs(ringBuffer[idx].value - tempBuffer[i].value) < 0.001) {
+      //     removed++;
+      //   } else {
+      //     break;
+      //   }
+      // }
+      // headIndex = (headIndex + removed) % BUFFER_SIZE;
+      // countMeasurements -= removed;
+      // xSemaphoreGive(ringBufferMutex);
       Serial.print("Successfully removed transmitted records: ");
       Serial.println(removed);
     } else {
@@ -185,20 +191,21 @@ void sendBuffer() {
     return;
   }
 
-  // Copy the oldest measurements into the temporary buffer
-  xSemaphoreTake(ringBufferMutex, portMAX_DELAY);
-  int sendCount = (countMeasurements < CHUNK_SIZE) ? countMeasurements : CHUNK_SIZE;
+  int sendCount = ringBuffer.getChunk(tempBuffer, CHUNK_SIZE);
+  // // Copy the oldest measurements into the temporary buffer
+  // xSemaphoreTake(ringBufferMutex, portMAX_DELAY);
+  // int sendCount = (countMeasurements < CHUNK_SIZE) ? countMeasurements : CHUNK_SIZE;
   if (sendCount == 0) {
-    xSemaphoreGive(ringBufferMutex);
+    //   xSemaphoreGive(ringBufferMutex);
     Serial.println("No data available for sending.");
     return;
   }
-  int localHead = headIndex;
-  for (int i = 0; i < sendCount; i++) {
-    int idx = (localHead + i) % BUFFER_SIZE;
-    tempBuffer[i] = ringBuffer[idx];
-  }
-  xSemaphoreGive(ringBufferMutex);
+  // int localHead = headIndex;
+  // for (int i = 0; i < sendCount; i++) {
+  //   int idx = (localHead + i) % BUFFER_SIZE;
+  //   tempBuffer[i] = ringBuffer[idx];
+  // }
+  // xSemaphoreGive(ringBufferMutex);
 
   // Create JSON document for the current chunk
   DynamicJsonDocument doc(15000);
@@ -264,12 +271,12 @@ void setup() {
   lastSendTime = millis();
   lastMemoryPrintTime = millis();
 
-  // Create the mutex
-  ringBufferMutex = xSemaphoreCreateMutex();
-  if (ringBufferMutex == NULL) {
-    Serial.println("Error creating the mutex.");
-    while (1);
-  }
+  // // Create the mutex
+  // ringBufferMutex = xSemaphoreCreateMutex();
+  // if (ringBufferMutex == NULL) {
+  //   Serial.println("Error creating the mutex.");
+  //   while (1);
+  // }
 }
 
 void loop() {
@@ -279,35 +286,37 @@ void loop() {
   // Measurement
   if (millis() - lastMeasureTime >= MEASURE_INTERVAL) {
     lastMeasureTime = millis();
-    // dumpTime();
 
-    float current_mA = ((float)INA.getShuntValue()) / (float)10;
+    Measurement m;
+    m.timestamp = getCurrentEpochUnixTimestamp();
+    m.value = ((float)INA.getShuntValue()) / (float)10;
+    ringBuffer.addMeasurement(m);
 
-    int64_t now = getCurrentEpochUnixTimestamp();
+    // int64_t now = getCurrentEpochUnixTimestamp();
     Serial.print("Measurement: ");
-    Serial.print(current_mA);
+    Serial.print(m.value);
     Serial.print(" mA, Time: ");
-    Serial.print(now);
+    Serial.print(m.timestamp);
 
     Serial.print(" Used slots: ");
-    Serial.print(countMeasurements);
+    Serial.print(ringBuffer.getCount());
     Serial.print("/");
     Serial.println(BUFFER_SIZE);
 
     // Write the new measurement into the ring buffer (mutex-protected)
-    xSemaphoreTake(ringBufferMutex, portMAX_DELAY);
-    if (countMeasurements < BUFFER_SIZE) {
-      int tail = (headIndex + countMeasurements) % BUFFER_SIZE;
-      ringBuffer[tail].value = current_mA;
-      ringBuffer[tail].timestamp = now;
-      countMeasurements++;
-    } else {
-      // Buffer full: Overwrite the oldest entry
-      ringBuffer[headIndex].value = current_mA;
-      ringBuffer[headIndex].timestamp = now;
-      headIndex = (headIndex + 1) % BUFFER_SIZE;
-    }
-    xSemaphoreGive(ringBufferMutex);
+    // xSemaphoreTake(ringBufferMutex, portMAX_DELAY);
+    // if (countMeasurements < BUFFER_SIZE) {
+    //   int tail = (headIndex + countMeasurements) % BUFFER_SIZE;
+    //   ringBuffer[tail].value = current_mA;
+    //   ringBuffer[tail].timestamp = now;
+    //   countMeasurements++;
+    // } else {
+    //   // Buffer full: Overwrite the oldest entry
+    //   ringBuffer[headIndex].value = current_mA;
+    //   ringBuffer[headIndex].timestamp = now;
+    //   headIndex = (headIndex + 1) % BUFFER_SIZE;
+    // }
+    // xSemaphoreGive(ringBufferMutex);
   }
 
   // Send data
