@@ -20,20 +20,6 @@
   - Stores measurements in an InfluxDB database.
   - Provides a Grafana dashboard for visualization.
 
-## Repository Structure
-
-```
-+-- firmware/               # ESP32 client firmware
-¦   +-- src/
-¦   +-- platformio.ini
-¦   +-- README.md
-+-- server/                 # Node.js backend server
-¦   +-- index.js
-¦   +-- docker-compose.yml
-¦   +-- README.md
-+-- README.md               # This file
-```
-
 ## Installation
 
 ### 1. Clone the Repository
