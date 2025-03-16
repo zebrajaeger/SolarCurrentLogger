@@ -11,6 +11,7 @@
 #include "sensor.h"
 
 // Compile-time checks for the configuration literals
+static_assert(sizeof(HOST_NAME) > 1, "HOST_NAME must not be empty!");
 static_assert(sizeof(WIFI_SSID) > 1, "WIFI_SSID must not be empty!");
 static_assert(sizeof(WIFI_PASSWORD) > 1, "WIFI_PASSWORD must not be empty!");
 static_assert(sizeof(SERVER_URL) > 1, "SERVER_URL must not be empty!");
@@ -80,6 +81,7 @@ void setup() {
   sensor.setup();
 
   // Establish WiFi connection
+  WiFi.setHostname(HOST_NAME);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   Serial.print("Connecting to WiFi");
   while (WiFi.status() != WL_CONNECTED) {
@@ -89,12 +91,12 @@ void setup() {
   Serial.println("\nWiFi connected");
 
   // OTA
-  ota.setup("SolarCurrentLogger");
+  ota.setup(HOST_NAME);
 
   // Synchronize NTP time
   ntp.setup();
 
-  // HTTP
+  // HTTPa
   http.setServerUrl(SERVER_URL);
 
 #ifdef API_TOKEN

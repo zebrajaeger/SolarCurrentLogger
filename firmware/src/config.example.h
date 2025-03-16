@@ -1,6 +1,8 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+#define HOST_NAME "SolarCurrentLogger"
+
 #define WIFI_SSID "myWifiSSID"
 #define WIFI_PASSWORD "myWifiPassword"
 #define SERVER_URL "http://192.168.178.100:7777/api/v1/data"
