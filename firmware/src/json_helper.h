@@ -2,23 +2,48 @@
 #define JSON_HELPER_H
 
 #include <ArduinoJson.h>
+
 #include "ringbuffer.h"
 
-// Generates a JSON payload from an array of Measurement objects.
-// The generated JSON is stored in the provided jsonPayload string.
-void toJson(const Measurement* buffer, int count, String* jsonPayload) {
-    // Allocate a dynamic JSON document (adjust size as needed)
-    DynamicJsonDocument doc(15000);
-    // Create a JSON array for measurements.
-    JsonArray measurementsArray = doc.createNestedArray("measurements");
-    // Loop through each measurement and add it to the array.
-    for (int i = 0; i < count; i++) {
-        JsonObject obj = measurementsArray.createNestedObject();
-        obj["timestamp"] = buffer[i].timestamp;
-        obj["value"] = buffer[i].value;
-    }
-    // Serialize the JSON document into the jsonPayload string.
-    serializeJson(doc, *jsonPayload);
-}
+template <size_t BufferSize>
+class JsonHelper {
+ public:
+  JsonHelper(size_t maxEntries) : maxEntries(maxEntries) {}
 
-#endif // JSON_HELPER_H
+  // Converts an Array of Measurement-Objecs into a JSON-String.
+  void toJson(const Measurement* measurementsBuffer, int count, String& jsonPayload) {
+    doc.clear();  // Clear the JSON document
+
+    JsonArray measurements = doc.createNestedArray("measurements");
+
+    // Warning if less measurements are available than expected
+    if (count < maxEntries) {
+      Serial.println("Warnung: Weniger Messwerte vorhanden als erwartet!");
+    }
+
+    int limit = (count < maxEntries) ? count : maxEntries;
+    for (int i = 0; i < limit; i++) {
+      JsonObject obj = measurements.createNestedObject();
+      obj["timestamp"] = measurementsBuffer[i].timestamp;
+      obj["value"] = measurementsBuffer[i].value;
+    }
+
+    serializeJson(doc, jsonPayload);
+  }
+
+  void toJson(const Measurement& measurement, String& jsonPayload) {
+    doc.clear();  // Clear the JSON document
+
+    JsonObject obj = doc.createNestedObject();
+    obj["timestamp"] = measurement.timestamp;
+    obj["value"] = measurement.value;
+
+    serializeJson(doc, jsonPayload);
+  }
+
+ private:
+  StaticJsonDocument<BufferSize> doc;
+  size_t maxEntries;
+};
+
+#endif  // JSON_HELPER_H

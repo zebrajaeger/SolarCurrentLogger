@@ -3,35 +3,42 @@
 #include <esp_heap_caps.h>
 
 #include "config.h"
+#include "esp_status.h"
 #include "http_sender.h"
 #include "json_helper.h"
+#include "mqtt_handler.h"
 #include "ntp.h"
 #include "ota.h"
 #include "ringbuffer.h"
 #include "sensor.h"
 
+SET_LOOP_TASK_STACK_SIZE(16 * 1024);
+
 // Compile-time checks for the configuration literals
-static_assert(sizeof(HOST_NAME) > 1, "HOST_NAME must not be empty!");
-static_assert(sizeof(WIFI_SSID) > 1, "WIFI_SSID must not be empty!");
-static_assert(sizeof(WIFI_PASSWORD) > 1, "WIFI_PASSWORD must not be empty!");
-static_assert(sizeof(SERVER_URL) > 1, "SERVER_URL must not be empty!");
-static_assert(sizeof(BUFFER_SIZE) > 1, "BUFFER_SIZE must not be empty!");
-static_assert(sizeof(CHUNK_SIZE) > 1, "CHUNK_SIZE must not be empty!");
+static_assert(sizeof(WIFI_RECONNECT_INTERVAL) > 0, "WIFI_RECONNECT_INTERVAL must not be empty!");
+static_assert(sizeof(HOST_NAME) > 0, "HOST_NAME must not be empty!");
+static_assert(sizeof(WIFI_SSID) > 0, "WIFI_SSID must not be empty!");
+static_assert(sizeof(WIFI_PASSWORD) > 0, "WIFI_PASSWORD must not be empty!");
+
+static_assert(sizeof(BUFFER_SIZE) > 0, "BUFFER_SIZE must not be empty!");
+static_assert(sizeof(CHUNK_SIZE) > 0, "CHUNK_SIZE must not be empty!");
+static_assert(sizeof(JSON_BUFFER_SIZE) > 0, "JSON_BUFFER_SIZE must not be empty!");
+
+static_assert(sizeof(USE_HTTP_SENDER) > 0, "USE_HTTP_SENDER must not be empty!");
+static_assert(sizeof(HTTP_SERVER_URL) > 0, "HTTP_SERVER_URL must not be empty!");
+
+static_assert(sizeof(USE_MQTT_SENDER) > 0, "USE_MQTT_SENDER must not be empty!");
+static_assert(sizeof(MQTT_SERVER_URL) > 0, "MQTT_SERVER_URL must not be empty!");
 
 INA219Sensor sensorINA219;
 Sensor &sensor = sensorINA219;
 
 unsigned long lastMeasureTime = 0;
-
-// Send buffer
-Measurement sendBuffer[CHUNK_SIZE];
-int sendBufferSize = 0;
-
-// Sending interval: a sending attempt is made every 5 seconds
 unsigned long lastSendTime = 0;
 
-// Interval for outputting free memory (here 60000 ms, configurable)
-unsigned long lastMemoryPrintTime = 0;
+// Status
+EspStatus espStatus;
+unsigned long lastStatusTime = 0;
 
 // OTA
 OTAHandler ota;
@@ -39,10 +46,32 @@ OTAHandler ota;
 // NTP
 NTPHandler ntp;
 
-// RingBuffer
+// Sending stuff
+Measurement sendBuffer[CHUNK_SIZE];
+int sendBufferSize = 0;
 RingBuffer ringBuffer(BUFFER_SIZE);
 
 HttpSender http;
+JsonHelper<JSON_BUFFER_SIZE> jsonHelper(CHUNK_SIZE);
+MqttHandler mqttHandler;
+
+unsigned long lastWifiReconnectAttempt = 0;
+
+void wifiReconnect() {
+  if (WiFi.status() == WL_CONNECTED) {
+    return;
+  }
+
+  unsigned long currentMillis = millis();
+  if (currentMillis - lastWifiReconnectAttempt >= WIFI_RECONNECT_INTERVAL) {
+    lastWifiReconnectAttempt = currentMillis;
+    Serial.println("WiFi disconnected. Attempting reconnect...");
+
+    WiFi.disconnect();
+
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  }
+}
 
 void sendChunk() {
   if (http.isSending()) {
@@ -57,7 +86,7 @@ void sendChunk() {
   }
 
   String jsonPayload;
-  toJson(sendBuffer, sendCount, &jsonPayload);
+  jsonHelper.toJson(sendBuffer, sendCount, jsonPayload);
   http.sendRequest(jsonPayload);
 
   sendBufferSize = sendCount;
@@ -65,6 +94,15 @@ void sendChunk() {
   Serial.print("Asynchronous sending process started for ");
   Serial.print(sendCount);
   Serial.println(" records.");
+}
+
+void sendStatus() {
+  String status;
+  espStatus.getStatus(status);
+  Serial.println(status);
+  if (USE_MQTT_SENDER) {
+    mqttHandler.publishStatus(status);
+  }
 }
 
 int64_t getCurrentEpochUnixTimestamp() {
@@ -76,6 +114,12 @@ int64_t getCurrentEpochUnixTimestamp() {
 void setup() {
   Serial.begin(115200);
   Serial.println("SolarCurrentLogger starting...");
+
+  Serial.println("Stacksize is: " + String(getArduinoLoopTaskStackSize()));
+  Serial.println("CrystalFreq: " + String(ESP.getCpuFreqMHz()) + " MHz");
+  Serial.println("CPUFreq: " + String(ESP.getCpuFreqMHz()) + " MHz");
+  Serial.println("FreeHeap: " + String(esp_get_free_heap_size()) + " Bytes");
+  Serial.println("MinFreeHeap: " + String(esp_get_minimum_free_heap_size()) + " Bytes");
 
   // Initialize sensor
   sensor.setup();
@@ -89,6 +133,8 @@ void setup() {
     Serial.print(".");
   }
   Serial.println("\nWiFi connected");
+  Serial.println("IP address: ");
+  Serial.println(WiFi.localIP());
 
   // OTA
   ota.setup(HOST_NAME);
@@ -96,8 +142,8 @@ void setup() {
   // Synchronize NTP time
   ntp.setup();
 
-  // HTTPa
-  http.setServerUrl(SERVER_URL);
+  // HTTP
+  http.setServerUrl(HTTP_SERVER_URL);
 
 #ifdef API_TOKEN
   http.setApiToken(API_TOKEN);
@@ -119,37 +165,51 @@ void setup() {
     Serial.println(removed);
   });
 
+  // MQTT
+  mqttHandler.setup(MQTT_SERVER_URL, HOST_NAME);
+
   lastMeasureTime = millis();
   lastSendTime = millis();
-  lastMemoryPrintTime = millis();
+
+  sendStatus();
+  lastStatusTime = millis();
 }
 
 void loop() {
+  wifiReconnect();
+
   // OTA
   ota.loop();
 
   // Measurement
   if (millis() - lastMeasureTime >= MEASURE_INTERVAL) {
-    lastMeasureTime = millis();
+    lastMeasureTime = lastMeasureTime + MEASURE_INTERVAL;
 
     Measurement m = {.value = sensor.getCurrentInMa(), .timestamp = getCurrentEpochUnixTimestamp()};
-    ringBuffer.addMeasurement(m);
+    if (USE_HTTP_SENDER) {
+      ringBuffer.addMeasurement(m);
+    }
 
+    if (USE_MQTT_SENDER) {
+      String jsonPayload;
+      jsonHelper.toJson(m, jsonPayload);
+      mqttHandler.publishMeasurement(jsonPayload);
+    }
     Serial.printf("Measurement: %.2f mA, Time: %lld Used slots: %d/%d\n", m.value, m.timestamp, ringBuffer.getCount(),
                   BUFFER_SIZE);
   }
 
-  // Send data
-  if (millis() - lastSendTime >= SEND_INTERVAL) {
-    lastSendTime = millis();
-    sendChunk();
+  if (USE_HTTP_SENDER) {
+    // Send data
+    if (millis() - lastSendTime >= SEND_INTERVAL) {
+      lastSendTime = lastSendTime + SEND_INTERVAL;
+      sendChunk();
+    }
   }
 
-  // Output free heap memory
-  if (millis() - lastMemoryPrintTime >= MEMORY_PRINT_INTERVAL) {
-    lastMemoryPrintTime = millis();
-    size_t freeHeap = esp_get_free_heap_size();
-    Serial.print("Free heap: ");
-    Serial.println(freeHeap);
+  // Output status
+  if (millis() - lastStatusTime >= STATUS_PRINT_INTERVAL) {
+    lastStatusTime = lastStatusTime + STATUS_PRINT_INTERVAL;
+    sendStatus();
   }
 }
