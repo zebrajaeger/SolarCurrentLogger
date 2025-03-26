@@ -20,6 +20,8 @@
   - Stores measurements in an InfluxDB database.
   - Provides a Grafana dashboard for visualization.
 
+![alt text](img/overview.png)
+
 ## Examples from Grafana
 From a technical point of view, I am satisfied with the result.
 The only thing I'm unhappy with is the yield.
