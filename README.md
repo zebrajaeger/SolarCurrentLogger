@@ -20,6 +20,18 @@
   - Stores measurements in an InfluxDB database.
   - Provides a Grafana dashboard for visualization.
 
+## Examples from Grafana
+From a technical point of view, I am satisfied with the result.
+The only thing I'm unhappy with is the yield.
+
+According to the manufacturer, the maximum current is 150 mA. But I didn't check it.
+
+### Result of a gray day with some rain (25.3.2025)
+![\[img/\]](img/2025-03-26_08-25.png)
+
+### Result of a beautiful day with blue sky (21.3.2025)
+![alt text](img/2025-03-26_08-21.png)
+
 ## Installation
 
 ### 1. Clone the Repository
