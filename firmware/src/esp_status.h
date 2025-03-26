@@ -28,11 +28,19 @@ class EspStatus {
     output += "Uptime: ";
     output += String(millis() / 1000);
     output += " s\n";
-
+    
     UBaseType_t stackHighWaterMark = uxTaskGetStackHighWaterMark(NULL);
     output += "Task Stack High Water Mark: ";
     output += String(stackHighWaterMark * sizeof(StackType_t));
     output += " Bytes\n";
+    
+    output += "Wifi RSSI: ";
+    output += String(WiFi.RSSI());
+    output += "\n";
+
+    output += "CPU temp: ";
+    output += String(temperatureRead());
+    output += " °C\n";
   }
 };
 
